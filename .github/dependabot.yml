@@ -5,8 +5,9 @@ updates:
     schedule:
       interval: weekly
     groups:
-      indirect:
-        dependency-type: indirect
+      go-deps:
+        patterns:
+          - "*"
 
   - package-ecosystem: github-actions
     directory: /
