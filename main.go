@@ -170,13 +170,7 @@ func main() {
 		}
 	}
 
-	useColor := isTTY()
-	if *forceColor {
-		useColor = true
-	}
-	if *noColor {
-		useColor = false
-	}
+	useColor := resolveColor(*forceColor, *noColor)
 
 	var fmFields []string
 	for _, f := range strings.Split(*fmFieldsStr, ",") {
@@ -218,7 +212,7 @@ func main() {
 				fmt.Fprintf(os.Stderr, "mdgrep: %s: is a directory (use -r to search recursively)\n", arg)
 				continue
 			}
-			filepath.WalkDir(arg, func(path string, d fs.DirEntry, err error) error {
+			if err := filepath.WalkDir(arg, func(path string, d fs.DirEntry, err error) error {
 				if err != nil || d.IsDir() {
 					return nil
 				}
@@ -226,7 +220,10 @@ func main() {
 					expanded = append(expanded, path)
 				}
 				return nil
-			})
+			}); err != nil {
+				fmt.Fprintf(os.Stderr, "mdgrep: %v\n", err)
+				os.Exit(2)
+			}
 			continue
 		}
 		// Fall back to glob expansion for non-directory paths.
@@ -268,6 +265,16 @@ func isTTY() bool {
 	return fi.Mode()&os.ModeCharDevice != 0
 }
 
+func resolveColor(force, noColor bool) bool {
+	if noColor {
+		return false
+	}
+	if force {
+		return true
+	}
+	return isTTY()
+}
+
 func printFilename(path string, color bool) {
 	if color {
 		fmt.Printf("%s%s%s\n", ansiBold+ansiCyan, path, ansiReset)
@@ -298,7 +305,7 @@ func processFile(path string, opts options) fileResult {
 	sc.Buffer(make([]byte, 1<<20), 1<<20) // 1 MB max line — handles wide tables
 
 	var (
-		fm           map[string]interface{}
+		fm           map[string]any
 		inFM         bool
 		fmLines      []string
 		headingStack []headingEntry
@@ -405,8 +412,8 @@ func parseHeading(line string) (level int, title string) {
 
 // parseFrontmatter handles the common YAML subset found in markdown frontmatter:
 // simple key: value strings, inline arrays [a, b, c], and block lists (- item).
-func parseFrontmatter(lines []string) map[string]interface{} {
-	fm := map[string]interface{}{}
+func parseFrontmatter(lines []string) map[string]any {
+	fm := make(map[string]any, len(lines))
 	for i := 0; i < len(lines); i++ {
 		line := lines[i]
 		colonIdx := strings.IndexByte(line, ':')
@@ -455,8 +462,8 @@ func parseFrontmatter(lines []string) map[string]interface{} {
 			fm[key] = true
 		} else if rest == "false" {
 			fm[key] = false
-		} else if i, err := strconv.ParseInt(rest, 10, 64); err == nil {
-			fm[key] = i
+		} else if n, err := strconv.ParseInt(rest, 10, 64); err == nil {
+			fm[key] = n
 		} else if f, err := strconv.ParseFloat(rest, 64); err == nil {
 			fm[key] = f
 		} else {
@@ -466,7 +473,7 @@ func parseFrontmatter(lines []string) map[string]interface{} {
 	return fm
 }
 
-func fmDisplay(fm map[string]interface{}, key string) (string, bool) {
+func fmDisplay(fm map[string]any, key string) (string, bool) {
 	v, ok := fm[key]
 	if !ok {
 		return "", false
@@ -487,9 +494,9 @@ func fmDisplay(fm map[string]interface{}, key string) (string, bool) {
 
 // includedSet computes which line indices fall within the context window of any
 // match, and which indices are direct matches.
-func includedSet(matchIdxs []int, total, before, after int) (included, isMatch map[int]bool) {
-	included = make(map[int]bool)
-	isMatch = make(map[int]bool)
+func includedSet(matchIdxs []int, total, before, after int) (map[int]bool, map[int]bool) {
+	included := make(map[int]bool)
+	isMatch := make(map[int]bool)
 	for _, mi := range matchIdxs {
 		isMatch[mi] = true
 		lo := mi - before
@@ -504,10 +511,10 @@ func includedSet(matchIdxs []int, total, before, after int) (included, isMatch m
 			included[j] = true
 		}
 	}
-	return
+	return included, isMatch
 }
 
-func renderCount(path string, fm map[string]interface{}, n int, opts options) {
+func renderCount(path string, fm map[string]any, n int, opts options) {
 	if opts.color {
 		bar := strings.Repeat("─", max(0, 72-len(path)))
 		fmt.Printf("%s%s── %s %s%s\n", ansiBold, ansiCyan, path, bar, ansiReset)
@@ -524,7 +531,7 @@ func renderCount(path string, fm map[string]interface{}, n int, opts options) {
 		}
 		fmt.Printf("%s\n\n", ansiReset)
 	} else {
-		data, _ := json.Marshal(map[string]interface{}{
+		data, _ := json.Marshal(map[string]any{
 			"file":  path,
 			"count": n,
 		})
@@ -532,7 +539,7 @@ func renderCount(path string, fm map[string]interface{}, n int, opts options) {
 	}
 }
 
-func renderTTY(path string, fm map[string]interface{}, infos []lineInfo, matchIdxs []int, opts options) {
+func renderTTY(path string, fm map[string]any, infos []lineInfo, matchIdxs []int, opts options) {
 	// File header.
 	bar := strings.Repeat("─", max(0, 72-len(path)))
 	fmt.Printf("%s%s── %s %s%s\n", ansiBold, ansiCyan, path, bar, ansiReset)
@@ -590,11 +597,11 @@ func renderTTY(path string, fm map[string]interface{}, infos []lineInfo, matchId
 	fmt.Println()
 }
 
-func renderJSON(path string, fm map[string]interface{}, infos []lineInfo, matchIdxs []int, opts options) {
+func renderJSON(path string, fm map[string]any, infos []lineInfo, matchIdxs []int, opts options) {
 	included, _ := includedSet(matchIdxs, len(infos), opts.before, opts.after)
 
 	// Build the subset of frontmatter the caller asked for.
-	selectedFM := map[string]interface{}{}
+	selectedFM := map[string]any{}
 	if fm != nil {
 		for _, field := range opts.fmFields {
 			if v, ok := fm[field]; ok {
@@ -617,7 +624,7 @@ func renderJSON(path string, fm map[string]interface{}, infos []lineInfo, matchI
 			}
 		}
 
-		rec := map[string]interface{}{
+		rec := map[string]any{
 			"file":     path,
 			"headings": infos[mi].headings,
 			"line":     infos[mi].lineNum,
@@ -640,22 +647,22 @@ func renderJSON(path string, fm map[string]interface{}, infos []lineInfo, matchI
 
 // evalCELFilter evaluates the compiled CEL program against a file's frontmatter.
 // Returns false if the expression evaluates to false, errors, or frontmatter is nil.
-func evalCELFilter(prg cel.Program, fm map[string]interface{}) bool {
+func evalCELFilter(prg cel.Program, fm map[string]any) bool {
 	if fm == nil {
-		fm = map[string]interface{}{}
+		fm = map[string]any{}
 	}
-	out, _, err := prg.Eval(map[string]interface{}{"fm": fmForCEL(fm)})
+	out, _, err := prg.Eval(map[string]any{"fm": fmForCEL(fm)})
 	if err != nil {
 		return false
 	}
-	b, ok := out.(types.Bool)
-	return ok && bool(b)
+	b, ok := out.Value().(bool)
+	return ok && b
 }
 
 // fmForCEL converts the frontmatter map into a form CEL can work with.
 // []string slices become []ref.Val lists so CEL's 'in' operator works correctly.
-func fmForCEL(fm map[string]interface{}) map[string]interface{} {
-	out := make(map[string]interface{}, len(fm))
+func fmForCEL(fm map[string]any) map[string]any {
+	out := make(map[string]any, len(fm))
 	for k, v := range fm {
 		switch val := v.(type) {
 		case []string:
@@ -681,13 +688,6 @@ func sliceEqual(a, b []string) bool {
 		}
 	}
 	return true
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 // compileCEL compiles a CEL filter expression into an evaluable program.
@@ -732,7 +732,7 @@ func scanForIndex(path string, celProg cel.Program) (entry indexEntry, skip bool
 	sc.Buffer(make([]byte, 1<<20), 1<<20)
 
 	var (
-		fm      map[string]interface{}
+		fm      map[string]any
 		inFM    bool
 		fmLines []string
 		lineNum int
@@ -809,13 +809,7 @@ func cmdIndex(args []string) {
 		}
 	}
 
-	useColor := isTTY()
-	if *forceColor {
-		useColor = true
-	}
-	if *noColor {
-		useColor = false
-	}
+	useColor := resolveColor(*forceColor, *noColor)
 
 	var files []string
 	for _, dir := range dirs {
@@ -825,7 +819,7 @@ func cmdIndex(args []string) {
 			os.Exit(2)
 		}
 		if info.IsDir() {
-			filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+			if err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 				if err != nil || d.IsDir() {
 					return nil
 				}
@@ -833,7 +827,10 @@ func cmdIndex(args []string) {
 					files = append(files, path)
 				}
 				return nil
-			})
+			}); err != nil {
+				fmt.Fprintf(os.Stderr, "mdgrep index: %v\n", err)
+				os.Exit(2)
+			}
 		} else if strings.HasSuffix(strings.ToLower(dir), ".md") {
 			files = append(files, dir)
 		}

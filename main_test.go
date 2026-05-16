@@ -9,6 +9,7 @@ import (
 // parseFrontmatter
 
 func TestParseFrontmatter_Scalars(t *testing.T) {
+	t.Parallel()
 	fm := parseFrontmatter([]string{
 		"title: My Doc",
 		`version: "3.2.1"`,
@@ -39,6 +40,7 @@ func TestParseFrontmatter_Scalars(t *testing.T) {
 }
 
 func TestParseFrontmatter_InlineArray(t *testing.T) {
+	t.Parallel()
 	fm := parseFrontmatter([]string{"tags: [go, cli, search]"})
 	tags, ok := fm["tags"].([]string)
 	if !ok {
@@ -50,6 +52,7 @@ func TestParseFrontmatter_InlineArray(t *testing.T) {
 }
 
 func TestParseFrontmatter_BlockArray(t *testing.T) {
+	t.Parallel()
 	fm := parseFrontmatter([]string{
 		"tags:",
 		"- go",
@@ -66,6 +69,7 @@ func TestParseFrontmatter_BlockArray(t *testing.T) {
 }
 
 func TestParseFrontmatter_Empty(t *testing.T) {
+	t.Parallel()
 	fm := parseFrontmatter(nil)
 	if len(fm) != 0 {
 		t.Errorf("expected empty map, got %v", fm)
@@ -75,10 +79,11 @@ func TestParseFrontmatter_Empty(t *testing.T) {
 // parseHeading
 
 func TestParseHeading(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
-		line       string
-		wantLevel  int
-		wantTitle  string
+		line      string
+		wantLevel int
+		wantTitle string
 	}{
 		{"# Hello", 1, "Hello"},
 		{"## World", 2, "World"},
@@ -101,6 +106,7 @@ func TestParseHeading(t *testing.T) {
 // expandCombinedFlags
 
 func TestExpandCombinedFlags(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		in   []string
 		want []string
@@ -124,7 +130,8 @@ func TestExpandCombinedFlags(t *testing.T) {
 // fmDisplay
 
 func TestFmDisplay(t *testing.T) {
-	fm := map[string]interface{}{
+	t.Parallel()
+	fm := map[string]any{
 		"title":  "My Title",
 		"tags":   []string{"a", "b"},
 		"empty":  "",
@@ -151,21 +158,24 @@ func TestFmDisplay(t *testing.T) {
 // sliceEqual
 
 func TestSliceEqual(t *testing.T) {
-	if !sliceEqual([]string{"a", "b"}, []string{"a", "b"}) {
-		t.Error("equal slices reported unequal")
+	t.Parallel()
+	cases := []struct {
+		a, b  []string
+		equal bool
+	}{
+		{[]string{"a", "b"}, []string{"a", "b"}, true},
+		{[]string{"a"}, []string{"a", "b"}, false},
+		{[]string{"a", "b"}, []string{"a", "c"}, false},
+		{nil, nil, true},
 	}
-	if sliceEqual([]string{"a"}, []string{"a", "b"}) {
-		t.Error("different-length slices reported equal")
-	}
-	if sliceEqual([]string{"a", "b"}, []string{"a", "c"}) {
-		t.Error("different-content slices reported equal")
-	}
-	if !sliceEqual(nil, nil) {
-		t.Error("nil slices reported unequal")
+	for _, c := range cases {
+		if got := sliceEqual(c.a, c.b); got != c.equal {
+			t.Errorf("sliceEqual(%v, %v): got %v, want %v", c.a, c.b, got, c.equal)
+		}
 	}
 }
 
-// scanForIndex
+// scanForIndex helpers
 
 func writeTempMD(t *testing.T, dir, name, content string) string {
 	t.Helper()
@@ -176,7 +186,10 @@ func writeTempMD(t *testing.T, dir, name, content string) string {
 	return path
 }
 
+// scanForIndex
+
 func TestScanForIndex_FrontmatterTitle(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := writeTempMD(t, dir, "doc.md", `---
 title: My Document
@@ -200,6 +213,7 @@ description: A great doc
 }
 
 func TestScanForIndex_SoleH1(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := writeTempMD(t, dir, "doc.md", "# Only Heading\n\nSome content.\n")
 	e, skip, err := scanForIndex(path, nil)
@@ -215,6 +229,7 @@ func TestScanForIndex_SoleH1(t *testing.T) {
 }
 
 func TestScanForIndex_MultipleH1FallsBackToFilename(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := writeTempMD(t, dir, "my-doc.md", "# First\n\n# Second\n")
 	e, skip, err := scanForIndex(path, nil)
@@ -230,6 +245,7 @@ func TestScanForIndex_MultipleH1FallsBackToFilename(t *testing.T) {
 }
 
 func TestScanForIndex_CELFilter(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := writeTempMD(t, dir, "doc.md", "---\ntags: [go, cli]\n---\n# Hello\n")
 
